@@ -16,7 +16,7 @@ cd /sdf/data/lcls/ds/cxi/cxil1037623/results/smalldata_tools/
 ```
 3. Run the following command, replacing the run number to a run with scattering data, so that you can see the masked portions of the detector. This will open up a ipython session where you will run a few more commands.
 ```bash
-./producers/runSmallDataAna -e cxil1037623 -r <run number>
+./lcls1_producers/runSmallDataAna -e cxil1037623 -r <run number>
 ```
 4. Run the following command to generate an average detector image from the run
 ```python
