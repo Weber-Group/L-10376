@@ -2,11 +2,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import h5py
 from typing import List, Dict, Union
-from scipy import signal
 
 """
 This file contains utilities for performing radial averaging on image data, 
-exploring HDF5 file structures, visualizing detector data, and other useful utilities.
+exploring HDF5 file structures, and visualizing detector data.
 
 Classes:
     RadialAverager: Performs radial averaging on 2D data.
@@ -17,7 +16,6 @@ Functions:
     get_leaves(f, saveto, verbose=False): Extracts datasets from an HDF5 file.
     runNumToString(num): Converts a number to a zero-padded string.
     plot_jungfrau(x, y, f, ax=None, shading='nearest', *args, **kwargs): Plots Jungfrau detector counts.
-    recalculateDG2IPM(rawDG2Traces,k_start=876, k_end=926): Recalculates the ipm_dg2 variables from the raw dg2 traces.
 """
 class RadialAverager(object):
 
@@ -246,39 +244,3 @@ def runNumToString(num):
     while len(numstr) < 4:
         numstr = '0' + numstr
     return numstr
-
-def recalculateDG2IPM(rawDG2Traces,k_start=876, k_end=926):
-    """Recalculate the ipm_dg2 variables given the raw DG2 traces.
-
-    Parameters
-    ----------
-    rawDG2Traces : np.ndarray (float)
-        Raw DG2 traces.
-    k_start : int
-        Start index of the maximum search, default is 876
-    k_end : int
-        End index of the maximum search, default is 926
-
-    Returns
-    -------
-    sum : np.ndarray (float) 
-        Sum of the DG2 readings. Analagous to ipm_dg2/sum.
-    xpos : np.ndarray (float)
-        X position of the xray beam on the DG2 IPM, in mm
-    ypos : np.ndarray (float)
-        Y position of the xray beam on the DG2 IPM, in mm
-    peaks : np.ndarray (float)
-        Peak heights of the traces after applying the fast impulse response filter
-    """
-    # Fast Impulse Response filter coefficients
-    fir = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 
-           0, 0, 0, 0, 0, 0, 
-           -0.125, -0.125, -0.125, -0.125, -0.125, -0.125, -0.125, -0.125]
-    filtered_trace = -signal.lfilter(fir, 1, rawDG2Traces, axis=-1) # Filtering the traces
-    peaks = np.max(np.abs(filtered_trace[:, :, k_start:k_end]), axis=2) # Calculating all of the peak values
-    Cx = -4.79 # X Calibration constant, in % per mm
-    Cy = -5.12 # Y Calibration constant, in % per mm
-    xpos = (100*(peaks[:,1]-peaks[:,3])/(peaks[:,1]+peaks[:,3]))/Cx
-    ypos = (100*(peaks[:,2]-peaks[:,4])/(peaks[:,2]+peaks[:,4]))/Cy
-    sums = peaks.sum(axis=1)
-    return sums, xpos, ypos, peaks
