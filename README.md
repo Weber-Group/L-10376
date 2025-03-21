@@ -1,6 +1,27 @@
 # L-10376
  Code for the L-10376 beamtime
 
+## Data processing
+### Todo:
+* Re-run all runs with Dg2 reprocesing after Ian and I work it out --> Done!
+* Check if gas cell pressure normalization works to smooth out DG2 IPM fatness --> It does!
+* Figure out how to grab unix time from h5 or xtc files so that we can pair runs <178 to the epics arch data
+### Processing
+1. Import all data
+2. Sort out bad shots based off of:
+    * Beam On
+    * J4M Sum
+    * DG2-IPM Sum
+    * Gas Cell Pressure (Accounting for gate valve trips)
+3. Additional filtering based off of
+    * XRT Spectrometer Sum
+    * XTCAV Analysis
+3. Normalize the azav to the gas cell pressure
+4. Normalize the azav to the recalculated DG2-IPM sum
+
+
+
+
 ## Masking process for filtered regions of the detector
 1. Using ubuntu, or another terminal that works with X11 forwarding, ssh into the cluster using the -Y tag to enable X11 forwarding
 ```bash
