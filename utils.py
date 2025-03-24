@@ -3,6 +3,10 @@ import numpy as np
 import h5py
 from typing import List, Dict, Union
 from scipy import signal
+from datetime import datetime, timedelta, timezone
+from epicsArch import *
+from scipy.interpolate import interp1d
+import scipy.io
 
 """
 This file contains utilities for performing radial averaging on image data, 
@@ -123,7 +127,7 @@ def plot_jungfrau(x, y, f, ax=None, shading='nearest', *args, **kwargs):
         pcm = ax.pcolormesh(x[i], y[i], f[i], shading=shading, *args, **kwargs)
     return pcm
 
-def combineRuns(runNumbers, folder, keys_to_combine, keys_to_sum, keys_to_check, verbose=False):
+def combineRuns(runNumbers, folder, keys_to_combine, keys_to_sum, keys_to_check, verbose=False, archImport=True):
     """Combine data from multiple runs into a single dataset.
 
     Parameters
@@ -151,10 +155,21 @@ def combineRuns(runNumbers, folder, keys_to_combine, keys_to_sum, keys_to_check,
             data_array.append(data)
     data_combined = {}
     for key in keys_to_combine:
-        arr = np.squeeze(data_array[0][key])
-        for data in data_array[1:]:
-            arr = np.concatenate((arr,np.squeeze(data[key])),axis=0)
-        data_combined[key] = arr
+        # Special routine for loading the gas cell pressure
+        epicsLoad = False # Default flag value
+        if (key == 'epicsUser/gasCell_pressure') & (archImport):
+            try:
+                arr = np.squeeze(data_array[0][key])
+                for data in data_array[1:]:
+                    arr = np.concatenate((arr,np.squeeze(data[key])),axis=0)
+                data_combined[key] = arr
+            except:
+                epicsLoad = True # Set flag if we can't load from the files
+        else: # All other keys load normally
+            arr = np.squeeze(data_array[0][key])
+            for data in data_array[1:]:
+                arr = np.concatenate((arr,np.squeeze(data[key])),axis=0)
+            data_combined[key] = arr
     run_indicator = np.array([])
     for i,runNumber in enumerate(runNumbers):
         run_indicator = np.concatenate((run_indicator,runNumber*np.ones_like(data_array[i]['lightStatus/xray'])))
@@ -170,6 +185,22 @@ def combineRuns(runNumbers, folder, keys_to_combine, keys_to_sum, keys_to_check,
             if not np.array_equal(data[key],arr):
                 print(f'Problem with key {key} in run {runNumbers[i]}')
         data_combined[key] = arr
+    # Now to do the special gas cell pressure loading if the flag was set
+    if epicsLoad:
+        archive = EpicsArchive()
+        unixTime = data_combined['unixTime']
+        epicsPressure = np.array([]) # Init empty array
+        for i,runNumber in enumerate(runNumbers):
+            # Pull out start and end times from each run
+            runUnixTime = unixTime[run_indicator==runNumber]
+            startTime = runUnixTime[0]
+            endTime = runUnixTime[-1]
+            [times,pressure] = archive.get_points(PV='CXI:MKS670:READINGGET', start=startTime, end=endTime,unit="seconds",raw=True,two_lists=True); # Make Request
+            # Interpolate the data
+            interp_func = interp1d(times, pressure, kind='previous', fill_value='extrapolate')
+            epicsPressure = np.append(epicsPressure,interp_func(runUnixTime)) # Append the data
+        # Once all the data is loaded in
+        data_combined['epicsUser/gasCell_pressure'] = epicsPressure # Save to the original key.       
     print('Loaded Data')
     return data_combined
 
@@ -282,3 +313,24 @@ def recalculateDG2IPM(rawDG2Traces,k_start=876, k_end=926):
     ypos = (100*(peaks[:,2]-peaks[:,4])/(peaks[:,2]+peaks[:,4]))/Cy
     sums = peaks.sum(axis=1)
     return sums, xpos, ypos, peaks
+
+def hist2dLinFit(xdata,ydata,bins, ax=None,linfit=False):
+    if ax is None:
+        ax = plt.gca()
+    if linfit:
+        poly_coeffs = np.polyfit(xdata, ydata, 1)
+        print(poly_coeffs)
+        # Generate fit curve
+        x_fit = np.linspace(np.min(xdata), np.max(xdata), 100)
+        y_fit = np.polyval(poly_coeffs, x_fit)
+    
+        rcoeff = scipy.stats.pearsonr(xdata, ydata)
+        plt.text(0.1, 0.8, f'Pearson r coeff: {rcoeff.statistic:.9f}',
+                 fontsize=12, fontweight='bold', transform=plt.gca().transAxes, ha='left', color='White')
+        # Overlay the fit curve
+        plt.plot(x_fit, y_fit, color='red', linewidth=2, label='Linear Fit', linestyle='--',zorder=2)
+        plt.legend()
+    
+    plt.hist2d(xdata,ydata,bins, zorder=1);
+    plt.show();
+    return ax

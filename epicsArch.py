@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import json
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 base_url = "https://pswww.slac.stanford.edu/archiveviewer"
