@@ -314,17 +314,22 @@ def recalculateDG2IPM(rawDG2Traces,k_start=876, k_end=926):
     sums = peaks.sum(axis=1)
     return sums, xpos, ypos, peaks
 
-def hist2dLinFit(xdata,ydata,bins, ax=None,linfit=False):
+def hist2dLinFit(xdata,ydata,bins, ax=None,linfit=False,xFrac=1):
     if ax is None:
         ax = plt.gca()
     if linfit:
-        poly_coeffs = np.polyfit(xdata, ydata, 1)
+        xCrop = xdata[xdata/xdata.max()<=xFrac]
+        yCrop = ydata[xdata/xdata.max()<=xFrac]
+        
+        poly_coeffs = np.polyfit(xCrop, yCrop, 1)
         print(poly_coeffs)
         # Generate fit curve
         x_fit = np.linspace(np.min(xdata), np.max(xdata), 100)
         y_fit = np.polyval(poly_coeffs, x_fit)
+        y_lin = np.polyval(poly_coeffs, xdata)
+        residuals = ydata-y_lin
     
-        rcoeff = scipy.stats.pearsonr(xdata, ydata)
+        rcoeff = scipy.stats.pearsonr(xCrop, yCrop)
         plt.text(0.1, 0.8, f'Pearson r coeff: {rcoeff.statistic:.9f}',
                  fontsize=12, fontweight='bold', transform=plt.gca().transAxes, ha='left', color='White')
         # Overlay the fit curve
@@ -332,5 +337,4 @@ def hist2dLinFit(xdata,ydata,bins, ax=None,linfit=False):
         plt.legend()
     
     plt.hist2d(xdata,ydata,bins, zorder=1);
-    plt.show();
-    return ax
+    return residuals
