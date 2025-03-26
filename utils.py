@@ -314,13 +314,21 @@ def recalculateDG2IPM(rawDG2Traces,k_start=876, k_end=926):
     sums = peaks.sum(axis=1)
     return sums, xpos, ypos, peaks
 
-def hist2dLinFit(xdata,ydata,bins, ax=None,linfit=False,xFrac=1):
+def hist2dLinFit(xdata,ydata,bins, ax=None,linfit=False,xFrac=None,xVal=None):
     if ax is None:
         ax = plt.gca()
     if linfit:
-        xCrop = xdata[xdata/xdata.max()<=xFrac]
-        yCrop = ydata[xdata/xdata.max()<=xFrac]
-        
+        if xFrac==None:
+            if xVal==None:
+                # Assume total data set for fit
+                xVal = xdata.max()
+            # Do the cropping based on the value
+            xCrop = xdata[xdata<=xVal]
+            yCrop = ydata[xdata<=xVal]
+        else:
+            # Do the cropping based on the fraction of the max
+            xCrop = xdata[xdata/xdata.max()<=xFrac]
+            yCrop = ydata[xdata/xdata.max()<=xFrac]
         poly_coeffs = np.polyfit(xCrop, yCrop, 1)
         print(poly_coeffs)
         # Generate fit curve
