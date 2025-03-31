@@ -7,7 +7,7 @@
 ### Todo:
 * Re-run all runs with Dg2 reprocesing after Ian and I work it out --> Done!
 * Check if gas cell pressure normalization works to smooth out DG2 IPM fatness --> It does!
-* Figure out how to grab unix time from h5 or xtc files so that we can pair runs <178 to the epics arch data --> Done, but it turns out there is an offset. Need to find out if this offset is stable across runs, then we can use it for <178.
+* Figure out how to grab unix time from h5 or xtc files so that we can pair runs <178 to the epics arch data --> Done, but it turns out there is an offset. Need to find out if this offset is stable across runs, then we can use it for <178. Ignored for now. Shouldn't be too much of an issue.
 * Need to figure out how to do this on a run-by-run basis. May have to incorporate this into the combine runs function --> Done
 * 
 ### Processing
