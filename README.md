@@ -9,7 +9,7 @@
 * Check if gas cell pressure normalization works to smooth out DG2 IPM fatness --> It does!
 * Figure out how to grab unix time from h5 or xtc files so that we can pair runs <178 to the epics arch data --> Done, but it turns out there is an offset. Need to find out if this offset is stable across runs, then we can use it for <178. Ignored for now. Shouldn't be too much of an issue.
 * Need to figure out how to do this on a run-by-run basis. May have to incorporate this into the combine runs function --> Done
-* 
+* Calculate all calibratons from Zn calibration runs for the XRT spectrometer. --> Done.
 ### Processing
 1. Import all data
 2. Sort out bad shots based off of:
@@ -22,6 +22,7 @@
     * XTCAV Analysis
 3. Normalize the azav to the gas cell pressure
 4. Normalize the azav to the recalculated DG2-IPM sum
+5. Import Zn calibration data
 
 
 
