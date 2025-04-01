@@ -22,6 +22,7 @@
     * XTCAV Analysis
 3. Normalize the azav to the gas cell pressure
 4. Normalize the azav to the recalculated DG2-IPM sum
+5. Import Zn calibration data
 
 
 
