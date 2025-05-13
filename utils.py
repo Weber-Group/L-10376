@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from epicsArch import *
 from scipy.interpolate import interp1d
 import scipy.io
+from IPython import get_ipython
+import re
 
 """
 This file contains utilities for performing radial averaging on image data, 
@@ -346,3 +348,23 @@ def hist2dLinFit(xdata,ydata,bins, ax=None,linfit=False,xFrac=None,xVal=None):
     
     plt.hist2d(xdata,ydata,bins, zorder=1);
     return residuals
+
+
+def enable_underscore_cleanup():
+    """Registers a post-cell hook to delete user-defined _ variables after each cell."""
+    ipython = get_ipython()
+    user_ns = ipython.user_ns  # This gives you access to the Jupyter notebook namespace
+
+    def clean_user_underscore_vars(*args, **kwargs):
+        def is_user_defined_underscore(var):
+            return (
+                var.startswith('_')
+                and not re.match(r'^_i\d*$|^_\d*$|^_ih$|^_oh$|^_ii*$|^_iii$|^_dh$|^_$', var)
+                and not var.startswith('__')
+            )
+
+        for var in list(user_ns):
+            if is_user_defined_underscore(var):
+                del user_ns[var]
+
+    ipython.events.register('post_run_cell', clean_user_underscore_vars)
