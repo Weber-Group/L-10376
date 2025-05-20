@@ -368,3 +368,6 @@ def enable_underscore_cleanup():
                 del user_ns[var]
 
     ipython.events.register('post_run_cell', clean_user_underscore_vars)
+
+def keV2Angstroms(keV):
+    return 12.39841984/keV
