@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.ndimage import binary_closing
+import matplotlib.pyplot as plt
 import psana
 from xtcav.ShotToShotCharacterization import ShotToShotCharacterization
 
@@ -150,5 +151,135 @@ def get_com_clean(ar, thresh=None, thresh_mode='median', std=1, close=2, returnm
     else:
         return ans
 
+
 def get_plot_lims(x,L):
     return np.array([int(np.round(x-L/2)),int(np.round(x+L/2))])
+
+
+def show_xtcav_firstpulse(run,vlims,hist=False):
+    """
+    Load and display the first xtcav pulse from run number `run`.
+    Optionally, display the histogram.
+
+    Parameters
+    ----------
+    run : int
+        The run number
+    vlims : len 2 tuple or list of numbers
+        vmin and vmax
+    hist : bool or 1D array
+        If True display a historgram and if False, don't.  If an array is
+        passed, use this as the bins array for the histogram.
+
+    Returns
+    -------
+    array, figs
+        `array` is the data array.  Figs is a 2-tuple (fig,ax) if hist if False
+        and is ((fig,ax),(fig_hist,ax_hist)) otherwise
+    """
+    vmin,vmax = vlims
+
+    # load data
+    image,success=load_xtcav_run_first_pulse(run)
+    
+    # show camera capture
+    fig,ax = plt.subplots()
+    ax.matshow(image,vmin=vmin,vmax=vmax)
+    ax.invert_yaxis()
+    #plt.show()
+    
+    # histogram
+    if isinstance(hist, np.ndarray):
+        fig_h,ax_h = plt.subplots()
+        ax_h.hist(image.ravel(),bins=hist)
+        ax_h.semilogy()
+        #plt.show()
+        hist = True
+    elif hist:
+        fig_h,ax_h = plt.subplots()
+        ax_h.hist(image.ravel())
+        ax_h.semilogy()
+        #plt.show()
+    else:
+        hist = False
+
+    # return
+    if not hist:
+        return image, (fig,ax)
+    else:
+        return image, ((fig,ax),(fig_h,ax_h))
+
+
+def show_xtcav_firstpulse_zoomin_grid(runs, vlims, fovs):
+    """
+    Display a grid of the first pulses from up to 8 runs.
+
+    Parameters
+    ----------
+    runs : len-8 or less array or list of ints
+        The run numbers
+    vlims : 2-tuple
+        vmin and vmax
+    fovs : 2-tuple
+        The zoom-in FOV (Lx,Ly) in pixels
+
+    Returns
+    -------
+    (ims,coms),(fig,axs)
+    """
+    # vars
+    vmin,vmax = vlims
+    Lx,Ly = fovs
+
+    # get first dataset
+    # load
+    image,success=load_xtcav_run_first_pulse(runs[0])
+    # get CoM
+    com = get_com_clean(image)
+    
+    # set up storage
+    s = image.shape
+    n = (len(runs))
+    ims = np.empty((n,s[0],s[1]))
+    coms = np.empty((n,2))
+
+    # store first dataset
+    ims[0] = image
+    coms[0] = com
+    
+    # get the rest of the data
+    for idx,runnum in enumerate(runs):
+        if idx == 0:
+            pass
+        else:
+            # load
+            image,success=load_xtcav_run_first_pulse(runnum)
+            # get CoM
+            com = get_com_clean(image)
+            # store
+            ims[idx] = image
+            coms[idx] = com
+    
+    # show
+    fig,axs = plt.subplots(2,4,figsize=(11,8))
+    for idx,runnum in enumerate(runs):
+        # get axis
+        axi = idx//4
+        axj = idx%4
+        ax = axs[axi,axj]
+        # get data
+        im = ims[idx]
+        com = coms[idx]
+        # show
+        try:
+            ax.matshow(im,vmin=vmin,vmax=vmax)
+            ax.set_xlim(get_plot_lims(com[1],Lx))
+            ax.set_ylim(get_plot_lims(com[0],Ly))
+            # run numbers
+            ax.text(0.03,0.97,f"{runnum}",size=16,color='w',ha='left',va='top',transform=ax.transAxes)
+        except:
+            pass
+    #plt.show()
+
+    # return
+    return (ims,coms), (fig,axs)
