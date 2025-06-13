@@ -4,6 +4,33 @@ import matplotlib.pyplot as plt
 import psana
 from xtcav.ShotToShotCharacterization import ShotToShotCharacterization
 
+
+############# Fns Round 2 (June 2025) ##############
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+############# Fns Round 1 (May 2025) ##############
+
 def load_xtcav_run_first_pulse(runnum):
     """
     Load the first recorded XTCAV pulse from a data run.
