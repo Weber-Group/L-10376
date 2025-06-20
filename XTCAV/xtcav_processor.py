@@ -87,7 +87,8 @@ class XTCAVProcessor(object):
 
     """
 
-    def __init__(self, data_source, env=None, preindex=False, iteration='good', verbose=True, _test_xy=False):
+    def __init__(self, data_source, env=None, preindex=False, iteration='good',
+        verbose=True, _test_xy=False, _patch_shot_metadata=False):
         """
         Parameters
         ----------
@@ -106,9 +107,13 @@ class XTCAVProcessor(object):
             Toggle vebosity
         _test_xy : bool
             Internal testing flag
+        _patch_shotMetadata : bool
+            If True, replace shot RF amp with global RF amp. Patch for exp. L10376-23
+            where all shot-to-shot RF amp and RF phase data was recorded as 0.
         """
         self._verbose = verbose
         self._test_xy = _test_xy
+        self._patch_shot_metadata = _patch_shot_metadata
         self.data_source = data_source
         self._set_env(env)
         ok = self._setup_global_calibrations()
@@ -326,8 +331,7 @@ class XTCAVProcessor(object):
     # Note that ._get_ebeam and ._get_gasdetector are
     # defined in ._set_data_source_types_and_getters
 
-    @staticmethod
-    def _get_shot_to_shot_parameters(ebeam, gasdetector):
+    def _get_shot_to_shot_parameters(self, ebeam, gasdetector):
         """
         Parameters
         ----------
@@ -354,6 +358,9 @@ class XTCAVProcessor(object):
             ebeamcharge=ebeam.ebeamCharge()
             xtcavrfamp=ebeam.ebeamXTCAVAmpl()
             xtcavrfphase=ebeam.ebeamXTCAVPhase()
+            if self._patch_shot_metadata:
+                xtcavrfamp = self._global_calibrations['rfampcalib']
+                xtcavrfphase = self._global_calibrations['rfphasecalib']
             dumpecharge=ebeam.ebeamDumpCharge() * ECHARGE  # in C
         else:
             warnings.warn_explicit('No ebeamv info',UserWarning,'XTCAV',0)
@@ -1053,6 +1060,142 @@ class XTCAVProcessor(object):
         }
         return imageStats
 
+    def calculate_physical_units(self, center, shotToShot):
+        """
+        Calculate physical units for the x (time) and y (energy) axes.
+
+        Parameters
+        ----------
+        center : len-2 array
+            Coordinates of the center of mass
+        shotToShot : dict
+            Properties of the specific shot
+        
+        Returns
+        -------
+        2-tuple : (dict, bool)
+            (physical units, success flag)
+        """
+        # success flag
+        ok=1
+
+        # get global calibration values
+        umperpix=self._global_calibrations['umperpix']
+        dumpe=self._global_calibrations['dumpe']
+        dumpdisp=self._global_calibrations['dumpdisp']    
+        rfampcalib=self._global_calibrations['rfampcalib']
+        rfphasecalib=self._global_calibrations['rfphasecalib']    
+        strstrength=self._global_calibrations['strstrength']
+        
+        # get shot-to-shot calibration values
+        rfamp=shotToShot['xtcavrfamp']
+        rfphase=shotToShot['xtcavrfphase']
+
+        # get pixel conversions
+        yMeVPerPix = umperpix*dumpe/dumpdisp*1e-3                   # y pixel size (MeV)
+        xfsPerPix = -umperpix*rfampcalib/(0.3*strstrength*rfamp)    # x pixel size (fs)
+
+        # time axis phase handling - (1) confirm ~linearity, (2) find positive dir
+        cosphasediff=math.cos((rfphasecalib-rfphase)*math.pi/180)
+        # (1) If the cosine of phase was too close to 0, raise warning and return failure
+        if np.abs(cosphasediff)<0.5:
+            warnings.warn_explicit('The phase of the bunch with the RF field is far from 0 or 180 degrees',UserWarning,'XTCAV',0)
+            ok=0
+        # (2) Flip time axis direction if needed
+        signflip = np.sign(cosphasediff)
+        xfsPerPix = signflip*xfsPerPix;    
+        
+        # calculate x- and y- axis vectors with physical units
+        xfs=xfsPerPix*(self.x-center[0])            # in fs
+        yMeV=yMeVPerPix*(self.y-center[1])          # in MeV
+               
+        # prepare answer and return
+        physicalUnits={
+            'yMeVPerPix':yMeVPerPix,
+            'xfsPerPix':xfsPerPix,
+            'xfs':xfs,
+            'yMeV':yMeV
+            }
+        return physicalUnits,ok
+
+    def get_physical_units_HARDCODED(self, center, shotToShot):
+        """
+        Retrieve physical units which have been hardcoded.
+
+        This method is a patch / temporary workaround for the problem of missing metadata
+        which is preventing proper calibration of the XTCAV camera's physical units.
+        Normally physical units should be found with .calculate_physical_units; this
+        method is a stand-in, and therefore accepts identical inputs.
+
+        Parameters
+        ----------
+        center : len-2 array
+            Coordinates of the center of mass
+        shotToShot : dict
+            Properties of the specific shot
+        
+        Returns
+        -------
+        2-tuple : (dict, bool)
+            (physical units, success flag)
+        """
+        ## success flag
+        #ok=1
+
+        ## get global calibration values
+        #umperpix=self._global_calibrations['umperpix']
+        #dumpe=self._global_calibrations['dumpe']
+        #dumpdisp=self._global_calibrations['dumpdisp']    
+        #rfampcalib=self._global_calibrations['rfampcalib']
+        #rfphasecalib=self._global_calibrations['rfphasecalib']    
+        #strstrength=self._global_calibrations['strstrength']
+        
+        ## get shot-to-shot calibration values
+        #rfamp=shotToShot['xtcavrfamp']
+        #rfphase=shotToShot['xtcavrfphase']
+
+        ## get pixel conversions
+        #yMeVPerPix = umperpix*dumpe/dumpdisp*1e-3                   # y pixel size (MeV)
+        #xfsPerPix = -umperpix*rfampcalib/(0.3*strstrength*rfamp)    # x pixel size (fs)
+
+        ## time axis phase handling - (1) confirm ~linearity, (2) find positive dir
+        #cosphasediff=math.cos((rfphasecalib-rfphase)*math.pi/180)
+        ## (1) If the cosine of phase was too close to 0, raise warning and return failure
+        #if np.abs(cosphasediff)<0.5:
+        #    warnings.warn_explicit('The phase of the bunch with the RF field is far from 0 or 180 degrees',UserWarning,'XTCAV',0)
+        #    ok=0
+        ## (2) Flip time axis direction if needed
+        #signflip = np.sign(cosphasediff)
+        #xfsPerPix = signflip*xfsPerPix;    
+        
+        ## calculate x- and y- axis vectors with physical units
+        #xfs=xfsPerPix*(self.x-center[0])            # in fs
+        #yMeV=yMeVPerPix*(self.y-center[1])          # in MeV
+        
+
+        # Raise a warning: these have not been correctly calibrated yet
+        warnings.warn("Hardcoded calibrations are not yet calculated - returning uncalibrated axes!")
+        ok = 1
+
+        ### Set physical units
+        yMeVPerPix = 1.0     # y pixel size (MeV)
+        xfsPerPix = 1.0      # x pixel size (fs)
+
+        ## calculate x- and y- axis vectors with physical units
+        xfs=xfsPerPix*(self.x-center[0])            # in fs
+        yMeV=yMeVPerPix*(self.y-center[1])          # in MeV
+        
+        # prepare answer and return
+        physicalUnits={
+            'yMeVPerPix':yMeVPerPix,
+            'xfsPerPix':xfsPerPix,
+            'xfs':xfs,
+            'yMeV':yMeV
+            }
+        return physicalUnits,ok
+
+
+
 
     # TODO
 
@@ -1214,7 +1357,9 @@ class XTCAVProcessor(object):
 
         Returns
         -------
-        3d array of shape (2,ny,nx)
+        2 tuple: (array, bool)
+            array = 3d array of shape (2,ny,nx)
+            bool = success flag
         """
         # Get a boolean image & find connected groups
         imgbool=frame>0
@@ -1228,6 +1373,8 @@ class XTCAVProcessor(object):
         # Index in order of descending area
         orderareaind=np.argsort(areas)  
         orderareaind=np.flipud(orderareaind)
+        if len(orderareaind)==0:
+            return np.zeros((n_bunches,self.ny,self.nx)), False
 
         # Discard bunches with areas smaller than 1/20'th the largest area
         n_area_valid=1
@@ -1239,7 +1386,9 @@ class XTCAVProcessor(object):
                 n_area_valid+=1
 
         # Set number of output images
-        n_output=np.amin([n_bunches,n_groups,n_area_valid])    
+        n_output=np.amin([n_bunches,n_groups,n_area_valid])
+        if n_output != n_bunches:
+            return np.zeros((n_bunches,self.ny,self.nx)), False
         assert(n_output==n_bunches), f"Failed to identify {n_bunches} distinct bunches with the island method; found only {n_output}."
 
         #Obtain the separated images
@@ -1268,7 +1417,7 @@ class XTCAVProcessor(object):
         orderangleind=np.argsort(-yi)  
 
         # Assign the output
-        ans=np.zeros((n_output,self.ny,self.nx))        
+        ans=np.zeros((n_output,self.ny,self.nx))
         for i in range(n_output):
             ans[i,:,:]=images[orderangleind[i]]
         
@@ -1277,7 +1426,7 @@ class XTCAVProcessor(object):
         #outimages=outimages/np.sum(outimages)
         
         # Return
-        return ans
+        return ans, True
 
     @staticmethod
     def split_frame_auththreshold(frame):
