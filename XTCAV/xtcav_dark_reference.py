@@ -1,13 +1,14 @@
 # Dark Reference Class
 
 import numpy as np
+from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 from past.utils import old_div
 from xtcav_processor import XTCAVProcessor
 
 class XTCAVDarkReference(XTCAVProcessor):
 
-    def __init__(self, data_source, max_shots=401, compute=True, env=None, preindex=False, iteration='frames', verbose=True, _test_xy=False):
+    def __init__(self, data_source, max_shots=401, compute=True, env=None, iteration='frames', verbose=True, _test_xy=False, _preindex=False):
         """
         Parameters
         ----------
@@ -19,10 +20,6 @@ class XTCAVDarkReference(XTCAVProcessor):
             If true, compute the dark reference upon instantiation
         env : None or a psana.Env
             if None uses dataSouce.env()
-        preindex : bool
-            Toggles indexing events on instantiation. If True, loops through all
-            events and determines which data types (ebeam, gas detector, XTCAV
-            camera frame) are present for each event.
         iteration : string in ('all', 'good', 'frames'):
             Determines which data is traversed when using the shot iterator.
             'all' iterates over all shots. 'good' iterates over shots with all data
@@ -31,15 +28,19 @@ class XTCAVDarkReference(XTCAVProcessor):
             Toggle verbosity
         _test_xy : bool
             Internal testing flag
+        _preindex : bool
+            Toggles indexing events on instantiation. If True, loops through all
+            events and determines which data types (ebeam, gas detector, XTCAV
+            camera frame) are present for each event.
         """
         XTCAVProcessor.__init__(
             self,
             data_source=data_source,
             env=env,
-            preindex=preindex,
             iteration=iteration,
             verbose=verbose,
-            _test_xy=_test_xy
+            _test_xy=_test_xy,
+            _preindex=_preindex,
         )
         self._max_shots = max_shots
         self._dark_reference = None
@@ -59,7 +60,14 @@ class XTCAVDarkReference(XTCAVProcessor):
         n = 0
 
         # loop
-        for i,j,evt in self._progress(self.shot_iterator, desc="Calculating dark reference", total=self.max_shots):
+        progbar = tqdm(desc="Calculating dark background reference", total=self.max_shots)
+        for i,j,evt in self.shot_iterator:
+            # finish?
+            if n >= self.max_shots:
+                progbar.n = n
+                progbar.refresh()
+                progbar.close()
+                break             
             # set event and get camera image
             self.set_current_event(evt)
             im = self.frame
@@ -68,10 +76,12 @@ class XTCAVDarkReference(XTCAVProcessor):
                 continue
             # add
             ans += im
-            n += 1            
-            # finish
-            if n >= self.max_shots:
-                break             
+            n += 1
+            # update progress
+            if n%10==0:
+                progbar.n = n
+                progbar.refresh()
+
 
         # finish
         self._dark_reference=old_div(ans,n)

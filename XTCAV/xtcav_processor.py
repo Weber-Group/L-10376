@@ -3,7 +3,7 @@
 
 import warnings
 import numpy as np
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from math import degrees
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -46,7 +46,7 @@ class XTCAVProcessor(object):
     have which data types present, so after you've iterated once over the
     whole dataset you can use
 
-    >>> xtpr._times_all  # to see indices of events with all data present
+    >>> xtpr._times_ok   # to see indices of events with all data present
     >>> xtpr._times_*    # to see indices of events with various data combos present
 
     where * can be (ebeam, gasdetector, frames, ebeamAndGas, ..., ebeam_only, ..., none).
@@ -87,26 +87,28 @@ class XTCAVProcessor(object):
 
     """
 
-    def __init__(self, data_source, env=None, preindex=False, iteration='good',
-        verbose=True, _test_xy=False, _patch_shot_metadata=False):
+    def __init__(self, data_source, env=None, iteration='ok',
+        verbose=True, _test_xy=False, _preindex=False, _patch_shot_metadata=False):
         """
         Parameters
         ----------
         data_source : a psana DataSource instance
         env : None or a psana.Env
             if None uses dataSouce.env()
-        preindex : bool
-            Toggles indexing events on instantiation. If True, loops through all
-            events and determines which data types (ebeam, gas detector, XTCAV
-            camera frame) are present for each event.
-        iteration : string in ('all', 'good', 'frames'):
+        iteration : string in ('all', 'ok', 'frames', 'good'):
             Determines which data is traversed when using the shot iterator.
-            'all' iterates over all shots. 'good' iterates over shots with all data
+            'all' iterates over all shots. 'ok' iterates over shots with all data
             present.  'frames' iterates over all data with XTCAV camera data present.
+            'good' iterates over shots which, after a complete iteration and
+            calculation of statistics, are usable
         verbose : bool
             Toggle vebosity
         _test_xy : bool
             Internal testing flag
+        _preindex : bool
+            Toggles indexing events on instantiation. If True, loops through all
+            events and determines which data types (ebeam, gas detector, XTCAV
+            camera frame) are present for each event.
         _patch_shotMetadata : bool
             If True, replace shot RF amp with global RF amp. Patch for exp. L10376-23
             where all shot-to-shot RF amp and RF phase data was recorded as 0.
@@ -122,13 +124,17 @@ class XTCAVProcessor(object):
         self._set_run()
         self._set_detectors()
         self._set_iteration_type(iteration)
-        if preindex:
+        if _preindex:
             self._preindex_shots()
             self.reset_shot_iterator()
         else:
             self._data_is_indexed = False
             self.reset_shot_iterator()
+        self._data_stats_are_calculated = False
+        self._setup_denoise_params()
         pass
+
+    ### Setup methods ###
 
     def _set_env(self, env):
         # Setup env
@@ -172,10 +178,13 @@ class XTCAVProcessor(object):
         else:
             self._camera_saturation_value = (1<<14)-1  # bit depth 14
 
+        # Set up containers for statistics
+        self._pulse_statistics = None
+        self._shot_to_shot_params = None
+        self._physical_units = None
+
         # Return
         return ok[0]
-
-
 
     def _get_global_calibration_value(self,names,ok):
         """
@@ -209,6 +218,42 @@ class XTCAVProcessor(object):
         self._times = self._run.times()
         if self._verbose:
             print("Done.")
+
+    def _setup_denoise_params(self):
+        """ Initialize denoising parameters
+        """
+        self._denoise_params = {
+            "bksb" : True,
+            "nstd" : 2,
+            "thresh_mode" : "median",
+            "close" : 1,
+            "noise_x" : 100,
+            "noise_y" : 100,
+            "noise_x_end" : True,
+            "noise_y_end" : True,
+            "medfilt_size" : 1,
+            "normalize" : True,
+        }
+        pass
+    def _update_denoise_params(self, **p):
+        """
+        """
+        new_params = {}
+        keys = (
+            'bksb',
+            'nstd',
+            'thresh_mode',
+            'close',
+            'noise_x',
+            'noise_y',
+            'noise_x_end',
+            'noise_y_end',
+            'medfilt_size',
+            'normalize'
+        )
+        for k in keys:
+            if k in p.keys(): new_params[k] = p[k]
+        self._denoise_params = self._denoise_params | new_params
 
     def _set_detectors(self):
         self._set_ebeam_data()
@@ -409,7 +454,8 @@ class XTCAVProcessor(object):
         self._times_ebeam_only = []
         self._times_gas_only = []
         self._times_frame_only = []
-        self._times_all = []
+        self._times_ok = []
+        self._times_good = []
         self._times_none = []
     
     def _preindex_shots(self):
@@ -432,7 +478,7 @@ class XTCAVProcessor(object):
             print(f"...found {len(self._times_gasdetector)} shots with gasdetector data")
             print(f"...found {len(self._times_frames)} shots with frame data")
             print()
-            print(f"...found {len(self._times_all)} shots with all 3 data sources")
+            print(f"...found {len(self._times_ok)} shots with all 3 data sources")
             print(f"...found {len(self._times_ebeamAndGas)} shots with ebeam+gas+NOT(frame) data")
             print(f"...found {len(self._times_ebeamAndFrame)} shots with ebeam+frame+NOT(gas) data")
             print(f"...found {len(self._times_gasAndFrame)} shots with gas+frame+NOT(ebeam) data")
@@ -464,7 +510,7 @@ class XTCAVProcessor(object):
             self._times_frames.append(i)
         # set joint detector indices
         if ebeam and gasdetector and frame:
-            self._times_all.append(i)
+            self._times_ok.append(i)
         elif ebeam and gasdetector and not frame:
             self._times_ebeamAndGas.append(i)
         elif ebeam and not gasdetector and frame:
@@ -490,25 +536,30 @@ class XTCAVProcessor(object):
         if self._data_is_indexed:
             if self._iteration_type=='all':
                 self.shot_iterator = self._setup_shot_iterator()
-            elif self._iteration_type=='good':
-                self.shot_iterator = self._setup_good_shot_iterator()
+            elif self._iteration_type=='ok':
+                self.shot_iterator = self._setup_ok_shot_iterator()
             elif self._iteration_type=='frames':
                 self.shot_iterator = self._setup_frame_shot_iterator()
+            elif self._iteration_type=='good':
+                self.shot_iterator = self._setup_good_shot_iterator()
             else:
-                raise Exception(f"Iteration type {self._iteration_type} is not supported. Must be in ('all','good','frames')")
+                raise Exception(f"Iteration type {self._iteration_type} is not supported. Must be in ('all','ok','frames','good')")
         else:
             if self._iteration_type=='all':
                 self.shot_iterator = self._setup_on_the_fly_shot_iterator()
-            elif self._iteration_type=='good':
-                self.shot_iterator = self._setup_good_on_the_fly_shot_iterator()
+            elif self._iteration_type=='ok':
+                self.shot_iterator = self._setup_ok_on_the_fly_shot_iterator()
             elif self._iteration_type=='frames':
                 self.shot_iterator = self._setup_frame_on_the_fly_shot_iterator()
+            elif self._iteration_type=='good':
+                warnings.warn("'Good' shots have not yet been determined during initial pass; using 'ok' shot iterator.")
+                self.shot_iterator = self._setup_ok_on_the_fly_shot_iterator()
             else:
-                raise Exception(f"Iteration type {self._iteration_type} is not supported. Must be in ('all','good','frames')")
+                raise Exception(f"Iteration type {self._iteration_type} is not supported. Must be in ('all','ok','frames','good')")
         pass
 
     def _set_iteration_type(self, iteration):
-        assert(iteration in ('all','good','frames')), f"Iteration type {iteration} is not supported. Must be in ('all','good','frames')"
+        assert(iteration in ('all','ok','frames','good')), f"Iteration type {iteration} is not supported. Must be in ('all','ok','frames','good')"
         self._iteration_type = iteration
         pass
 
@@ -516,7 +567,7 @@ class XTCAVProcessor(object):
         """ Update the shot iterator type, then reset the iterator.
 
         Parameters
-        iteration : string in ('all', 'good', 'frames'):
+        iteration : string in ('all', 'ok', 'frames', 'good'):
         """
         self._set_iteration_type(iteration)
         self.reset_shot_iterator()
@@ -530,36 +581,46 @@ class XTCAVProcessor(object):
         while idx < self.N_shots:
             yield idx,idx,self.get_event(idx)
             idx += 1
+        self.reset_shot_iterator()
         print(f"All {self.N_shots} shots have been traversed.")
-        print("To restart from the beginning, run .reset_shot_iterator().")
-        print("To traverse shots meeting specific data availibility criteria,")
-        print("use the .generate_*_shots_iterator() methods.")
+        print("Resetting the shot iterator.")
         pass
-    def _setup_good_shot_iterator(self):
-        """ Create iterator looping over all shots.
+    def _setup_ok_shot_iterator(self):
+        """ Create iterator looping over all shots with XTCAV camera, ebeam,
+        and gas detector data present.
         """
         idx = 0
-        while idx < len(self._times_all):
-            idx_times = self._times_all[idx]
+        while idx < len(self._times_ok):
+            idx_times = self._times_ok[idx]
             yield idx,idx_times,self.get_event(idx_times)
             idx += 1
-        print(f"All {len(self._times_all)} good shots have been traversed.")
-        print("To restart from the beginning, run .reset_shot_iterator().")
-        print("To traverse shots meeting specific data availibility criteria,")
-        print("use the .generate_*_shots_iterator() methods.")
+        self.reset_shot_iterator()
+        print(f"All {self.N_shots} shots have been traversed.")
+        print("Resetting the shot iterator.")
         pass
     def _setup_frame_shot_iterator(self):
-        """ Create iterator looping over all shots.
+        """ Create iterator looping over all shots containing XTCAV camera data.
         """
         idx = 0
         while idx < len(self._times_frames):
             idx_times = self._times_frames[idx]
             yield idx,idx_times,self.get_event(idx_times)
             idx += 1
-        print(f"All {len(self._times_frames)} shots with XTCAV camera data have been traversed.")
-        print("To restart from the beginning, run .reset_shot_iterator().")
-        print("To traverse shots meeting specific data availibility criteria,")
-        print("use the .generate_*_shots_iterator() methods.")
+        self.reset_shot_iterator()
+        print(f"All {self.N_shots} shots have been traversed.")
+        print("Resetting the shot iterator.")
+        pass
+    def _setup_good_shot_iterator(self):
+        """ Create iterator looping over all usable (all stats calculable) shots.
+        """
+        idx = 0
+        while idx < len(self._times_good):
+            idx_times = self._times_good[idx]
+            yield idx,idx_times,self.get_event(idx_times)
+            idx += 1
+        self.reset_shot_iterator()
+        print(f"All {self.N_shots} shots have been traversed.")
+        print("Resetting the shot iterator.")
         pass
 
     # On-the-fly iterators
@@ -574,12 +635,11 @@ class XTCAVProcessor(object):
             yield idx,idx,event
             idx += 1
         self._data_is_indexed = True
-        print(f"All {self.N_shots} shots have been traversed and indexed.")
-        print("To restart from the beginning, run .reset_shot_iterator().")
-        print("To traverse shots meeting specific data availibility criteria,")
-        print("use the .generate_*_shots_iterator() methods.")
+        self.reset_shot_iterator()
+        print(f"All {self.N_shots} shots have been traversed.")
+        print("Resetting the shot iterator.")
         pass
-    def _setup_good_on_the_fly_shot_iterator(self):
+    def _setup_ok_on_the_fly_shot_iterator(self):
         """ Create iterator looping over all shots, indexing shots on-the-fly.
         """
         self._setup_indexing()
@@ -595,10 +655,9 @@ class XTCAVProcessor(object):
                 pass
             idx += 1
         self._data_is_indexed = True
-        print(f"All {len(self._times_all)} good shots have been traversed.")
-        print("To restart from the beginning, run .reset_shot_iterator().")
-        print("To traverse shots meeting specific data availibility criteria,")
-        print("use the .generate_*_shots_iterator() methods.")
+        self.reset_shot_iterator()
+        print(f"All {self.N_shots} shots have been traversed.")
+        print("Resetting the shot iterator.")
         pass
     def _setup_frame_on_the_fly_shot_iterator(self):
         """ Create iterator looping over all shots, indexing shots on-the-fly.
@@ -616,10 +675,9 @@ class XTCAVProcessor(object):
                 pass
             idx += 1
         self._data_is_indexed = True
-        print(f"All {len(self._times_frames)} shots with XTCAV camera data have been traversed.")
-        print("To restart from the beginning, run .reset_shot_iterator().")
-        print("To traverse shots meeting specific data availibility criteria,")
-        print("use the .generate_*_shots_iterator() methods.")
+        self.reset_shot_iterator()
+        print(f"All {self.N_shots} shots have been traversed.")
+        print("Resetting the shot iterator.")
         pass
 
     # User facing pre-indexed iterator generators
@@ -628,8 +686,8 @@ class XTCAVProcessor(object):
         """
         assert(self._data_is_indexed), "This iterator can't be used unless data is indexed!"
         idx = 0
-        while idx < len(self._times_all):
-            idx_times = self._times_all[idx]
+        while idx < len(self._times_ok):
+            idx_times = self._times_ok[idx]
             yield idx,idx_times,self.get_event(idx_times)
             idx += 1
     def generate_ebeam_shots_iterator(self):
@@ -809,9 +867,9 @@ class XTCAVProcessor(object):
         """
         return self.get_frame_bksb(self.frame)
 
-    def get_frame_denoised(self, frame, nstd=2, thresh_mode='median', close=1,
-        noise_x=100, noise_y=100, noise_x_end=True, noise_y_end=True,
-        medfilt_size=1, normalize=True, returnall=False):
+    def get_frame_denoised(self, frame, nstd=None, thresh_mode=None, close=None,
+        noise_x=None, noise_y=None, noise_x_end=None, noise_y_end=None,
+        medfilt_size=None, normalize=None, returnall=False):
         """
         Returns a frame after denoising.  
 
@@ -858,6 +916,28 @@ class XTCAVProcessor(object):
         -------
         2d array
         """
+        # update params
+        p = {}
+        if nstd is not None: p['nstd'] = nstd
+        if thresh_mode is not None: p['thresh_mode'] = thresh_mode
+        if close is not None: p['close'] = close
+        if noise_x is not None: p['noise_x'] = noise_x
+        if noise_y is not None: p['noise_y'] = noise_y
+        if noise_x_end is not None: p['noise_x_end'] = noise_x_end
+        if noise_y_end is not None: p['noise_y_end'] = noise_y_end
+        if medfilt_size is not None: p['medfilt_size'] = medfilt_size
+        if normalize is not None: p['normalize'] = normalize
+        self._update_denoise_params(**p)
+        params = self._denoise_params
+        nstd = params['nstd']
+        thresh_mode = params['thresh_mode']
+        close = params['close']
+        noise_x = params['noise_x']
+        noise_y = params['noise_y']
+        noise_x_end = params['noise_x_end']
+        noise_y_end = params['noise_y_end']
+        medfilt_size = params['medfilt_size']
+        normalize = params['normalize']
         # get noise statistics
         roi_noise_x = (-noise_x,frame.shape[1]) if noise_x_end else (0,noise_x)
         roi_noise_y = (-noise_y,frame.shape[0]) if noise_y_end else (0,noise_y)
@@ -889,9 +969,9 @@ class XTCAVProcessor(object):
         else:
             return ans
 
-    def get_frame_denoised_current(self, bksb=True, nstd=2, thresh_mode='median', close=1,
-        noise_x=100, noise_y=100, noise_x_end=True, noise_y_end=True,
-        medfilt_size=1, normalize=True, returnall=False):
+    def get_frame_denoised_current(self, bksb=None, nstd=None, thresh_mode=None, close=None,
+        noise_x=None, noise_y=None, noise_x_end=None, noise_y_end=None,
+        medfilt_size=None, normalize=None, returnall=False):
         """
         Returns a frame after denoising. See .get_frame_denoised(). 
 
@@ -900,11 +980,36 @@ class XTCAVProcessor(object):
         bksb : bool
             Toggles applying dark reference subtraction before denoising
         """
-
+        # update params
+        p = {}
+        if bksb is not None: p['bksb'] = bksb
+        if nstd is not None: p['nstd'] = nstd
+        if thresh_mode is not None: p['thresh_mode'] = thresh_mode
+        if close is not None: p['close'] = close
+        if noise_x is not None: p['noise_x'] = noise_x
+        if noise_y is not None: p['noise_y'] = noise_y
+        if noise_x_end is not None: p['noise_x_end'] = noise_x_end
+        if noise_y_end is not None: p['noise_y_end'] = noise_y_end
+        if medfilt_size is not None: p['medfilt_size'] = medfilt_size
+        if normalize is not None: p['normalize'] = normalize
+        self._update_denoise_params(**p)
+        params = self._denoise_params
+        bksb = params['bksb']
+        nstd = params['nstd']
+        thresh_mode = params['thresh_mode']
+        close = params['close']
+        noise_x = params['noise_x']
+        noise_y = params['noise_y']
+        noise_x_end = params['noise_x_end']
+        noise_y_end = params['noise_y_end']
+        medfilt_size = params['medfilt_size']
+        normalize = params['normalize']
+        # background subtraction
         if bksb:
             frame = self.get_frame_bksb_current()
         else:
             frame = self.frame
+        # get and return the answer
         return self.get_frame_denoised(
             frame=frame,
             nstd=nstd,
@@ -1194,6 +1299,75 @@ class XTCAVProcessor(object):
             }
         return physicalUnits,ok
 
+
+    def get_shot_by_shot_statistics(self,n_pulses,_n_shots_max=None):
+        """
+        """
+        # Containers
+        self._pulse_statistics=[[] for i in range(n_pulses)]
+        self._shot_to_shot_params=[]
+        self._physical_units=[]
+        self._times_good=[]
+
+        # Prep for loop
+        self.reset_shot_iterator()
+        progress_bar = tqdm(
+            desc="Calculating shot-by-shot statistics...",
+            total=self.N_shots
+        )
+
+        # Loop
+        for idx,(i,j,evt) in enumerate(self.shot_iterator):
+            # Get event & data
+            self.set_current_event(evt)
+            ebeam, gasdetector, frame = self.get_data(evt)
+            shotToShot,ok = self._get_shot_to_shot_parameters(ebeam,gasdetector)
+            if not ok:
+                continue
+            
+            # Prepare pulse images - denoise & split
+            im = self.get_frame_denoised_current()
+            ims,ok = self.split_frame(im,n_pulses)
+            if not ok:
+                continue
+            
+            # Get statistics
+            imageStats = []
+            for i in range(n_pulses):
+                imageStats.append(self.get_pulse_statistics(ims[i]))
+            
+            # Get physical units
+            # TODO fix with proper unit calibration once we have correct metadata
+            # TODO fix to handle double shots correctly
+            #physical_units, ok = xtpr.calculate_physical_units(   # this line should be used once we have the correct metadata
+            physical_units, ok = self.get_physical_units_HARDCODED(
+                center = np.array([imageStats[0]['xCOM'],imageStats[0]['yCOM']]),
+                shotToShot = shotToShot
+            )
+            if not ok:
+                continue
+
+            # Store outputs
+            if ok:
+                for i in range(n_pulses):
+                    self._pulse_statistics[i].append(imageStats[i])
+                self._shot_to_shot_params.append(shotToShot)
+                self._physical_units.append(physical_units)
+                self._times_good.append(j)
+            
+            # Update iterator
+            progress_bar.n = j+1
+            progress_bar.refresh()
+
+            # TODO - remove
+            if _n_shots_max is not None:
+                if idx>=_n_shots_max-1:
+                    break
+        progress_bar.close()
+        print(f"Done. Calculated statistics for {idx+1} shots.")
+        print("Setting shot iterator to traverse good shots only.")
+        self.reset_iteration_type('good')
+        pass
 
 
 
@@ -1557,7 +1731,7 @@ class XTCAVProcessor(object):
             returnfig=returnfig,
         )
 
-    def show_frame_statistics(self, frame, imageStats, vrange=None, fov=(120,240), profiles=False, returnfig=False):
+    def show_frame_statistics(self, frame, imageStats, vrange=None, fov=(120,240), profiles=True, returnfig=False):
         """
         """
         fig,(ax1,ax2) = self.show_frame(
@@ -1583,24 +1757,43 @@ class XTCAVProcessor(object):
             plt.show()
             pass
 
-    def show_denoise_statistics_ROI(self, vrange=None, noise_x=100, noise_y=100,
-        noise_x_end=True, noise_y_end=True):
+    def show_pulse_statistics(self,idx,n_pulses,vrange=None,fov=(120,240),profiles=True,returnfig=False):
+        """
+        """
+        # Get frames
+        jdx = self._times_good[idx]
+        evt = self.get_event(jdx)
+        self.set_current_event(evt)
+        im = self.get_frame_denoised_current()
+        ims,ok = self.split_frame(im,n_pulses)
+        assert(ok), "Failed to split image frame"
+
+        # Get stats
+        imageStats = []
+        for i in range(n_pulses):
+            imageStats.append(self._pulse_statistics[i][idx])
+
+        # Show
+        figs=[]
+        for i in range(n_pulses):
+            fig,axs = self.show_frame_statistics(ims[i],imageStats[i],vrange=vrange,fov=fov,profiles=profiles,returnfig=True)
+            fig.suptitle(f'Pulse {i+1}')
+            figs.append((fig,axs))
+
+        # Return
+        if returnfig:
+            return figs
+        else:
+            plt.show()
+
+    def show_denoise_statistics_ROI(self, vrange=None, returnfig=False):
         """
         Parameters
         ----------
         vrange : 2-tuple
             (vmin,vmax)
-        noise_x : int
-            The noise statistics region's extent in x
-        noise_y : int
-            The noise statistics region's extent in y
-        noise_x_end : bool
-            Toggles whether the noise statistics regions is taken from the front
-            (False) or back (True) of the image array in x
-        noise_y_end : bool
-            Toggles whether the noise statistics regions is taken from the front
-            (False) or back (True) of the image array in x
-
+        returnfig : bool
+            toggle returning the plot
         """
         # Get ROI
         _,_,roi = self.get_frame_denoised_current(
@@ -1615,7 +1808,8 @@ class XTCAVProcessor(object):
         # Make figure
         if vrange is None:
             vrange = (np.min(im),np.max(im))
-        fig,((ax11,ax12),(ax21,ax22)) = plt.subplots(2,2,figsize=(10,10))
+        fig,axs = plt.subplots(2,2,figsize=(10,10))
+        ((ax11,ax12),(ax21,ax22)) = axs
         ax11.matshow(im,vmin=vrange[0],vmax=vrange[1])
         ax12.matshow(roi)
         ax21.matshow(im*roi,vmin=vrange[0],vmax=vrange[1])
@@ -1624,8 +1818,10 @@ class XTCAVProcessor(object):
         ax12.invert_yaxis()
         ax21.invert_yaxis()
         ax22.invert_yaxis()
-        plt.show()
-
+        if returnfig:
+            return fig,axs
+        else:
+            plt.show()
 
     @staticmethod
     def get_plot_lims(x,L):
