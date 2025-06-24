@@ -1,15 +1,14 @@
 # TODO: Temporal ghost imaging & XTCAV analysis
 
-- [ ] Dataset structure
-  - [ ] Define epochs
-- [ ] Reference data
-  - [ ] Identify reference datasets (dark, no lasing) for each epoch
-  - [ ] Select epoch, get average reference captures
-  - [ ] Variations in refs, outliers & variance
-- [ ] Run xtcav2
-  - [ ] xtcavDark
-  - [ ] xtcavLasingOff
-  - [ ] xtcavLasingOn
+- [X] Dataset structure
+  - [X] Define epochs
+- [X] Reference data
+  - [X] Identify reference datasets (dark, no lasing) for each epoch
+  - [X] Select epoch, get average reference captures
+  - [X] Variations in refs, outliers & variance
+- [ ] Calibration
+  - [ ] Get all necessary metadata
+  - [ ] Complete calibrations
 - [ ] Set up ghost imaging
   - [ ] Normalize, get p(t)
   - [ ] Get autocorrelation
