@@ -131,6 +131,7 @@ class XTCAVProcessor(object):
             self._data_is_indexed = False
             self.reset_shot_iterator()
         self._data_stats_are_calculated = False
+        self._setup_vis_params()
         self._setup_denoise_params()
         pass
 
@@ -218,6 +219,31 @@ class XTCAVProcessor(object):
         self._times = self._run.times()
         if self._verbose:
             print("Done.")
+
+    def _setup_vis_params(self):
+        """ Initialize visualization parameters
+        """
+        self._vis_params = {
+            "vrange" : None,
+            "fov" : (120,240),
+            "bins" : None,
+            "preprocess" : False,
+        }
+    def _update_vis_params(self, **p):
+        """
+        """
+        new_params = {}
+        keys = (
+            'vrange',
+            'fov',
+            'bins',
+            'preprocess',
+        )
+        for k in keys:
+            if k in p.keys():
+                if p[k] is not None:
+                    new_params[k] = p[k]
+        self._vis_params = self._vis_params | new_params
 
     def _setup_denoise_params(self):
         """ Initialize denoising parameters
@@ -1643,9 +1669,15 @@ class XTCAVProcessor(object):
 
     ##### Visualization #####
 
-    def show_frame(self, frame, vrange=None, hist=True, bins=None, zoom=True, fov=(120,240), returnfig=False):
+    def show_frame(self, frame, vrange=None, fov=None, bins=None, hist=True, zoom=True, update_params=True, returnfig=False):
         """
         """
+        # Get params
+        if update_params:
+            self._update_vis_params(vrange=vrange,bins=bins,fov=fov)
+        vrange = vrange if vrange is not None else self._vis_params['vrange']
+        bins = bins if bins is not None else self._vis_params['bins']
+        fov = fov if fov is not None else self._vis_params['fov']
         # Setup figure
         if hist and zoom:
             fig,axs = plt.subplots(1,3,figsize=(15,5))
@@ -1702,15 +1734,22 @@ class XTCAVProcessor(object):
             plt.show()
             pass
 
-    def show_current_frame(self, vrange=None, hist=True, bins=None, zoom=True, fov=(120,240), preprocess=None, returnfig=False):
+    def show_current_frame(self, vrange=None, fov=None, bins=None, hist=True, zoom=True, preprocess=None, update_params=True, returnfig=False):
         """
         Parameters
         ----------
         preprocess : None or string in ('bksb', 'denoise', 'denoise_nonorm')
         """
         assert(self.frame is not None), "No XTCAV camera image data exists for the current event."
+        # Get params
+        if update_params:
+            self._update_vis_params(vrange=vrange,bins=bins,fov=fov,preprocess=preprocess)
+        vrange = vrange if vrange is not None else self._vis_params['vrange']
+        bins = bins if bins is not None else self._vis_params['bins']
+        fov = fov if fov is not None else self._vis_params['fov']
+        preprocess = preprocess if preprocess is not None else self._vis_params['preprocess']
         # get frame
-        if preprocess is None:
+        if preprocess is False:
             frame = self.frame
         elif preprocess == 'bksb':
             frame = self.get_frame_bksb_current()
@@ -1719,21 +1758,31 @@ class XTCAVProcessor(object):
         elif preprocess == 'denoise_nonorm':
             frame = self.get_frame_denoised_current(normalize=False)
         else:
-            raise Exception(f"`preprocess` must be in ('bksb', 'denoise', 'denoise_nonorm', None), not {preprocess}")
+            raise Exception(f"`preprocess` must be in ('bksb', 'denoise', 'denoise_nonorm', False), not {preprocess}")
         # show
-        return self.show_frame(
+        fig,ax = self.show_frame(
             frame,
             vrange=vrange,
             hist=hist,
             bins=bins,
             zoom=zoom,
             fov=fov,
-            returnfig=returnfig,
+            returnfig=True,
         )
+        if returnfig:
+            return fig,ax
+        else:
+            plt.show()
 
-    def show_frame_statistics(self, frame, imageStats, vrange=None, fov=(120,240), profiles=True, returnfig=False):
+    def show_frame_statistics(self, frame, imageStats, vrange=None, fov=None, profiles=True, update_params=True, returnfig=False):
         """
         """
+        # Get params
+        if update_params:
+            self._update_vis_params(vrange=vrange,fov=fov)
+        vrange = vrange if vrange is not None else self._vis_params['vrange']
+        fov = fov if fov is not None else self._vis_params['fov']
+        # Show
         fig,(ax1,ax2) = self.show_frame(
             frame,
             vrange=vrange,
@@ -1757,7 +1806,7 @@ class XTCAVProcessor(object):
             plt.show()
             pass
 
-    def show_pulse_statistics(self,idx,n_pulses,vrange=None,fov=(120,240),profiles=True,returnfig=False):
+    def show_pulse_statistics(self,idx,n_pulses,vrange=None,fov=None,profiles=True,returnfig=False):
         """
         """
         # Get frames
