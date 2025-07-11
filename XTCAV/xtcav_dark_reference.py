@@ -8,7 +8,8 @@ from xtcav_processor import XTCAVProcessor
 
 class XTCAVDarkReference(XTCAVProcessor):
 
-    def __init__(self, data_source, max_shots=401, compute=True, env=None, iteration='frames', verbose=True, _test_xy=False, _preindex=False):
+    def __init__(self, data_source, max_shots=1000, compute=True, env=None,
+        iteration='frames', verbose=True, _test_xy=False, _preindex=False):
         """
         Parameters
         ----------
@@ -20,9 +21,9 @@ class XTCAVDarkReference(XTCAVProcessor):
             If true, compute the dark reference upon instantiation
         env : None or a psana.Env
             if None uses dataSouce.env()
-        iteration : string in ('all', 'good', 'frames'):
+        iteration : string in ('all', 'ok', 'frames'):
             Determines which data is traversed when using the shot iterator.
-            'all' iterates over all shots. 'good' iterates over shots with all data
+            'all' iterates over all shots. 'ok' iterates over shots with all data
             present.  'frames' iterates over all data with XTCAV camera data present.
         verbose : bool
             Toggle verbosity

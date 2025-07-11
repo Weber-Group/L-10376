@@ -9,7 +9,9 @@ from xtcav_processor import XTCAVProcessor, ECHARGE
 
 class XTCAVLasingOffReference(XTCAVProcessor):
 
-    def __init__(self, data_source, shots_per_group=100, env=None, iteration='frames', verbose=True, _test_xy=False, _preindex=False):
+    def __init__(self, data_source, shots_per_group=100, env=None, iteration='ok',
+        fov=(120,240), dark_reference=None, n_pulses=1, verbose=True,
+        _test_xy=False, _preindex=False):
         """
         Parameters
         ----------
@@ -19,10 +21,21 @@ class XTCAVLasingOffReference(XTCAVProcessor):
             Number of shots to include in each average profile
         env : None or a psana.Env
             if None uses dataSouce.env()
-        iteration : string in ('all', 'good', 'frames'):
+        iteration : string in ('all', 'ok', 'frames'):
             Determines which data is traversed when using the shot iterator.
-            'all' iterates over all shots. 'good' iterates over shots with all data
+            'all' iterates over all shots. 'ok' iterates over shots with all data
             present.  'frames' iterates over all data with XTCAV camera data present.
+        fov : tuple
+            The field-of-view to zoom in about each shot's center-of-mass, in pixels.
+            This value is used both for display as well as for data filtering. For
+            filtering, if more than 10% of the zoom-box along a single axis extends
+            beyond the camera frame, the shot is not used.
+        dark_reference : XTCAVDarkReference or 2D array or None
+            Object containing analysis from the dark reference run or average dark
+            reference array. If None is passed, this should be set later using
+            .set_darkreference().
+        n_pulses : integer
+            The number of pulses per shot
         verbose : bool
             Toggle verbosity
         _test_xy : bool
@@ -37,6 +50,9 @@ class XTCAVLasingOffReference(XTCAVProcessor):
             data_source=data_source,
             env=env,
             iteration=iteration,
+            fov=fov,
+            dark_reference=dark_reference,
+            n_pulses=n_pulses,
             verbose=verbose,
             _test_xy=_test_xy,
             _preindex=_preindex,
@@ -76,9 +92,8 @@ class XTCAVLasingOffReference(XTCAVProcessor):
             'N_pulses'      int                    number of pulses
             'N_puofiles'    int                    number of average profiles
             'N_per_profile' int                    number of profiles averaged in each group
-            # TODO - add time/fiducials
-            ##'eventTime'   (N_pu,N_pr)            unix times used for jumping to events
-            ## 'eventFid'   (N_pu,N_pr)            fiducial values used for jumping to events
+            'eventTime'     (N_pu,N_pr)            unix times used for jumping to events
+            'eventFid'      (N_pu,N_pr)            fiducial values used for jumping to events
         """
         # Validate & assign inputs
         assert(self._pulse_statistics is not None), "Pulse statistics not found; run .get_shot_by_shot_statistics()!"
@@ -94,6 +109,7 @@ class XTCAVLasingOffReference(XTCAVProcessor):
         N_pulses = len(list_image_stats)              # pulses per shot
         N_groups = int(np.floor(N/shots_per_group))
         assert(N == len(list_shot_to_shot_params) == len(list_physical_units)), "pulse info dict lengths are not consistent!"
+        assert(N_pulses == self.n_pulses), "number of pulses is not consistent!"
 
         # Set a time vector   
         # initialize values (maximum,  minimum, & increment)
@@ -124,8 +140,8 @@ class XTCAVLasingOffReference(XTCAVProcessor):
         average_DE = np.zeros((N_pulses,N_groups), dtype=np.float64)                # energy difference between pulse centers of masses with respect to the center of the first pulse (MeV)
         average_tRMS = np.zeros((N_pulses,N_groups), dtype=np.float64)              # Total dispersion in time in fs
         average_eRMS = np.zeros((N_pulses,N_groups), dtype=np.float64)              # Total dispersion in energy in MeV
-        ##event_time = np.zeros((N_pulses,N_groups), dtype=np.uint64)
-        ##event_fid = np.zeros((N_pulses,N_groups), dtype=np.uint32)
+        event_time = np.zeros((N_pulses,N_groups), dtype=np.uint64)                 # Event unix time
+        event_fid = np.zeros((N_pulses,N_groups), dtype=np.uint32)                  # Event ID
 
         # Progress bars
         progbar1 = tqdm(desc=f"Looping through the {N_pulses} pulses", total=N_pulses)
@@ -187,23 +203,29 @@ class XTCAVLasingOffReference(XTCAVProcessor):
                 # for i in range(N):    
                 #     if group[i]==g:
 
-                    # TODO - add time/fiducials
-                    ##event_time[j][g] = list_shot_to_shot_params[i]['unixtime']
-                    ##event_fid[j][g] = list_shot_to_shot_params[i]['fiducial']
+                    # Event ID info
+                    event_time[j][g] = list_shot_to_shot_params[i]['unixtime']
+                    event_fid[j][g] = list_shot_to_shot_params[i]['fiducial']
+
+                    # Center-of-mass statistics
                     dist_t = (image_stats[i]['xCOM']-list_image_stats[0][i]['xCOM'])*list_physical_units[i]['xfsPerPix']  # time - pixels -> fs
                     dist_e = (image_stats[i]['yCOM']-list_image_stats[0][i]['yCOM'])*list_physical_units[i]['yMeVPerPix'] # time - pixels -> MeV
                     average_DT[j,g] = average_DT[j,g]+dist_t       # accumulate
                     average_DE[j,g] = average_DE[j,g]+dist_e       # accumulate
-                    
+
+                    # RMS statistics
                     average_tRMS[j,g] = average_tRMS[j,g]+image_stats[i]['xRMS']*list_physical_units[i]['xfsPerPix']   # convert -> fs and accumulate
                     average_eRMS[j,g] = average_eRMS[j,g]+image_stats[i]['yRMS']*list_physical_units[i]['yMeVPerPix']  # convert -> MeV and accumulate
 
+                    # Current
                     dt_old = list_physical_units[i]['xfs'][1]-list_physical_units[i]['xfs'][0]    # dt before interpolation
                     eCurrent = image_stats[i]['xProfile']/(dt_old*1e-15)*N_electrons[i]   # current (electrons/s)
-                    
+
+                    # COM & RMS vs. time
                     eCOMslice = (image_stats[i]['yCOMslice']-image_stats[i]['yCOM'])*list_physical_units[i]['yMeVPerPix'] # Energy CoM vs. t, -> MeV
                     eRMSslice = image_stats[i]['yRMSslice']*list_physical_units[i]['yMeVPerPix']                                 # Energy dispersion vs. t, -> MeV
-                        
+
+                    # Interpolate with standardized time vector
                     interp = interp1d(list_physical_units[i]['xfs']-dist_t,eCurrent,kind='linear',fill_value=0,bounds_error=False,assume_sorted=True)  # time interpolation                   
                     average_current[j,g,:] = average_current[j,g,:]+interp(t);  # accumulate
                                                 
@@ -241,19 +263,16 @@ class XTCAVLasingOffReference(XTCAVProcessor):
             'distE':average_DE,               # energy difference between pulse centers of masses with respect to the center of the first pulse (MeV)
             'tRMS': average_tRMS,             # mean time dispersion (fs)
             'eRMS': average_eRMS,             # mean energy dispersion (MeV)
-            'N_pulses': N_pulses,                   # number of bunches
-            'N_profiles': N_groups,                   # number of groups
+            'N_pulses': N_pulses,             # number of bunches
+            'N_profiles': N_groups,           # number of groups
             'N_per_profile': shots_per_group, # number of profiles averaged in each group
-            # TODO - add time/fiducials
-            ##'eventTime': event_time,        # unix times used for jumping to events
-            ##'eventFid': event_fid           # fiducial values used for jumping to events
+            'eventTime': event_time,          # unix times used for jumping to events
+            'eventFid': event_fid             # fiducial values used for jumping to events
             }
         if returnans:
             return self._reference_profiles
         else:
             pass
-
-
 
     def show_reference_profiles(self,idx_pulse=0,lims=[-36,36],cmap=None,returnfig=False):
         """

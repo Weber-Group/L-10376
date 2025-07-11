@@ -25,56 +25,43 @@ class XTCAVProcessor(object):
     For some psana.DataSource `ds`,
     
     >>> xtpr = XTCAVProcessor(ds)
-    >>> for i,j,evt in xproc.shot_iterator:
+
+    will instantiate an XTCAV processing object instance,
+
+    >>> i,j,evt = next(xtpr.shot_iterator)
+
+    will grab the first 'ok' event (i.e. containing data from the gas detector,
+    electron beam, and XTCAV camera), where `i` is the 'ok' event index (i.e.
+    in this example `i` is 0 indicating the first 'ok' event), `j` is the event
+    index (i.e. if the first 'ok' event found in this data run is the 150'th
+    shot, `j` is 149) and `evt` is a psana.Event instance. Subsequently running
+
+    >>> xtpr.set_current_event(evt)
+    >>> xtpr.show_current_frame(
+    >>>     vrange=(0,350),
+    >>>     bins=np.linspace(0,1000,100),
+    >>>     fov=fov
+    >>> )
+
+    will set and then display data from this event, showing the XTCAV camera
+    frame, a zoom-in on the shot(s), and an intensity histogram.
+
+    >>> for i,j,evt in xtpr.shot_iterator:
     >>>     # your code
     >>>     pass
 
-    will iterate over events in the data source, where `j` is the event number
-    in the data run counting the first shot as 0, `i` is the "usable" event
-    number where "usable" means all data (e-beam, gas detector, and xtcav camera)
-    is present for this shot, and `evt` is the psana.Event. To instead consider
-    all events as "usable" you can either subsequently call
-
-    >>> xtpr.reset_iteration_type('all')
-
-    or simply instantiate the object with
-
-    >>> xtpr = XTCAVProcessor(ds, iteration='all')
-
-    or to let "usable" mean any events containing XTCAV camera data replace
-    'all' with 'frames'.  XTCAVProcessor will keep track of which events
-    have which data types present, so after you've iterated once over the
-    whole dataset you can use
-
-    >>> xtpr._times_ok   # to see indices of events with all data present
-    >>> xtpr._times_*    # to see indices of events with various data combos present
-
-    where * can be (ebeam, gasdetector, frames, ebeamAndGas, ..., ebeam_only, ..., none).
-    After indexing you can iterate over a data subset of interest with, e.g.
-
-    >>> for i,j,evt in xtpr.generate_ebeam_shots_iterator():
-
-    to iterate over all events with ebeam data, or you can simply reset the
-    default iterator with `xtpr.reset_shot_iterator()`. If you'd like to index
-    the entire dataset immediately, you can specify that at instantiation with
-
-    >>> xtpr = XTCAVProcessor(ds, preindex=True)
-
-    Note that if this data has not been accessessed recently, this operation
-    may be slow as the data is moved from archives and indexing consists
-    essentially entirely of sequential reads from storage; after the first
-    pass through a data source the time required should drop significantly.
-    To access the data itself you have two options.  One is to call
-
+    will iterate over events all events in the data source. Once you have an
+    event, you can access data one of two ways - either call
+    
     >>> ebeam, gas, image = xtpr.get_data(event)
 
-    The second option is to call
+    to get the data directly, or call
 
     >>> xtpr.set_current_event(event)
 
-    at which point the data for that event will be accessible as properties
-    at `.ebeam`, `.gasdetector`, and `.frame`.  Data not present for this
-    event will return None. So
+    to "set" the event, at which point the data for that event is accessible as
+    properties at `.ebeam`, `.gasdetector`, and `.frame`.  Data not present for
+    this event will return None. So
 
     >>> i,j,evt = next(xproc.shot_iterator)
     >>> xtpr.set_current_event(evt)
@@ -83,24 +70,85 @@ class XTCAVProcessor(object):
     will display the image captured on the XTCAV camera for the j'th event,
     provided that that data exists.
 
+    Event Iterators
+    ---------------
+
+    >>> xtpr.shot_iterator
+
+    is a Python iterator which loops through events.  The iterator can be reset
+    to the beginning of the dataset with
+
+    >>> xtpr.reset_shot_iterator()
+
+    Instantiating with the `iteration` keyword enables looping over a different
+    event set, i.e. setting
+
+    >>> xtpr = XTCAVProcessor(ds, iteration='all')
+    >>> xtpr = XTCAVProcessor(ds, iteration='frames')
+
+    iterates instead over all events regardless of what data is present in the
+    first case or all events containing image frames on the XTCAV camera in the
+    second case.  This can also be reset post-instantiation with
+
+    >>> xtpr.reset_iteration_type(iteration=*)
+
+    for an appropriate value of `*`.
+
+    The  XTCAVProcessor instance will keep track of which events have which data
+    types present, and will have created a complete log after it finishes one
+    complete iteration over the dataset.  At this point you can see the event
+    indices containing various data subsets with
+
+    >>> xtpr._times_ok   # to see indices of events with all data present
+    >>> xtpr._times_*    # to see indices of events with various data combos present
+
+    where * can be (ebeam, gasdetector, frames, ebeamAndGas, ..., ebeam_only,
+    ..., none). You can now iterate over a data subset of interest with, e.g.
+
+    >>> for i,j,evt in xtpr.generate_ebeam_shots_iterator():
+
+    to iterate over all events with ebeam data, or you can simply reset the
+    default iterator with `xtpr.reset_shot_iterator()`.
+
+    Finally, 'good' shots have all detectors present *and* their statistics
+    can be calculated.  These are shots that meet the 'ok' criteria and
+    additionally have all their shot-to-shot metadata, have no saturated
+    pixels on the camera, the pulses are not too close to the camera edges,
+    pulses can be successfully split into distinct frames for multi-pulse data,
+    and physical units can be calibrated.  'good' shots are determined when
+    `xtpr.get_shot_by_shot_statistics` is run. At this point the shot
+    iterator is automatically reset to iterate over 'good' shots.
+
+
     (Benjamin H. Savitzky, 6/2025)
 
     """
 
-    def __init__(self, data_source, env=None, iteration='ok',
-        verbose=True, _test_xy=False, _preindex=False, _patch_shot_metadata=False):
+    def __init__(self, data_source, env=None, iteration='ok', fov=(120,240),
+        dark_reference=None, n_pulses=1, verbose=True, _test_xy=False,
+        _preindex=False, _patch_shot_metadata=False,
+        _overwrite_global_metadata={}, _overwrite_shotByShot_metadata={}):
         """
         Parameters
         ----------
         data_source : a psana DataSource instance
         env : None or a psana.Env
             if None uses dataSouce.env()
-        iteration : string in ('all', 'ok', 'frames', 'good'):
+        iteration : string in ('all', 'ok', 'frames'):
             Determines which data is traversed when using the shot iterator.
             'all' iterates over all shots. 'ok' iterates over shots with all data
             present.  'frames' iterates over all data with XTCAV camera data present.
-            'good' iterates over shots which, after a complete iteration and
-            calculation of statistics, are usable
+        fov : tuple
+            The field-of-view to zoom in about each shot's center-of-mass, in pixels.
+            This value is used both for display as well as for data filtering. For
+            filtering, if more than 10% of the zoom-box along a single axis extends
+            beyond the camera frame, the shot is not used.
+        dark_reference : XTCAVDarkReference or 2D array or None
+            Object containing analysis from the dark reference run or average dark
+            reference array. If None is passed, this should be set later using
+            .set_darkreference().
+        n_pulses : integer
+            The number of pulses per shot
         verbose : bool
             Toggle vebosity
         _test_xy : bool
@@ -112,15 +160,28 @@ class XTCAVProcessor(object):
         _patch_shotMetadata : bool
             If True, replace shot RF amp with global RF amp. Patch for exp. L10376-23
             where all shot-to-shot RF amp and RF phase data was recorded as 0.
+        _overwrite_global_metadata : dict
+            Dictionary items will be used in place of EPICS data of the same name
+            when assigning global metadata. Valid keys are ('umperpix',
+            'strstrength','rfampcalib','rfphasecalib','dumpe','dumpdisp')
+        _overwrite_local_metadata : dict
+            Dictionary items will be used in place of shot-by-shot metadata of the
+            same name. Valid keys are ('ebeamcharge','dumpecharge','xtcavrfamp',
+            'xtcavrfphase')
         """
         self._verbose = verbose
         self._test_xy = _test_xy
         self._patch_shot_metadata = _patch_shot_metadata
         self.data_source = data_source
         self._set_env(env)
+        self._setup_calibration_metadata_overwriting(
+            _overwrite_global_metadata,
+            _overwrite_shotByShot_metadata,
+        )
         ok = self._setup_global_calibrations()
-        #if not ok:
+        if not ok:
         #    raise Exception('Failed to find all global calibrations!')
+            warnings.warn('Failed to find all global calibrations!')
         self._set_run()
         self._set_detectors()
         self._set_iteration_type(iteration)
@@ -132,7 +193,11 @@ class XTCAVProcessor(object):
             self.reset_shot_iterator()
         self._data_stats_are_calculated = False
         self._setup_vis_params()
+        self._update_vis_params(fov=fov)
         self._setup_denoise_params()
+        if dark_reference is not None:
+            self.set_darkreference(dark_reference)
+        self._set_n_pulses(n_pulses)
         pass
 
     ### Setup methods ###
@@ -147,6 +212,44 @@ class XTCAVProcessor(object):
         self._epics_store = self._env.epicsStore()
         pass
 
+    def _setup_calibration_metadata_overwriting(
+        _overwrite_global_metadata,
+        _overwrite_shotByShot_metadata,
+        ):
+        """
+        """
+        # Global items
+        valid_keys_global = (
+            'umperpix',
+            'strstrength',
+            'rfampcalib',
+            'rfphasecalib',
+            'dumpe',
+            'dumpdisp'
+        )
+        self._global_calibration_overwrites = {}
+        for k,v in _overwrite_global_metadata.items():
+            if k not in valid_keys_global:
+                warnings.warn(f"Key {k} is not a valid global metadata key overwrite; must be in {valid_keys_global}")
+            else:
+                self._global_calibration_overwrites[k] = v
+
+        # Shot-by-shot items
+        valid_keys_shotByShot = (
+            'ebeamcharge',
+            'dumpecharge',
+            'xtcavrfamp',
+            'xtcavrfphase',
+        )
+        self._shotByShot_calibration_overwrites = {}
+        for k,v in _overwrite_shotByShot_metadata.items():
+            if k not in valid_keys_shotByShot:
+                warnings.warn(f"Key {k} is not a valid shot-by-shot metadata key overwrite; must be in {valid_keys_shotByShot}")
+            else:
+                self._shotByShot_calibration_overwrites[k] = v
+        pass
+
+
     def _setup_global_calibrations(self):
         """
         Setup the global XTCAV calibration parameters from the epicsStore
@@ -157,12 +260,30 @@ class XTCAVProcessor(object):
         """
         # Global calibratio values
         ok = [1]
-        umperpix = self._get_global_calibration_value(['XTCAV_calib_umPerPx','OTRS:DMP1:695:RESOLUTION'],ok)
-        strstrength = self._get_global_calibration_value(['XTCAV_strength_par_S','Streak_Strength','OTRS:DMP1:695:TCAL_X'],ok)
-        rfampcalib = self._get_global_calibration_value(['XTCAV_Amp_Des_calib_MV','XTCAV_Cal_Amp','SIOC:SYS0:ML01:AO214'],ok)
-        rfphasecalib = self._get_global_calibration_value(['XTCAV_Phas_Des_calib_deg','XTCAV_Cal_Phase','SIOC:SYS0:ML01:AO215'],ok)
-        dumpe = self._get_global_calibration_value(['XTCAV_Beam_energy_dump_GeV','Dump_Energy','REFS:DMP1:400:EDES'],ok)
-        dumpdisp = self._get_global_calibration_value(['XTCAV_calib_disp_posToEnergy','Dump_Disp','SIOC:SYS0:ML01:AO216'],ok)
+        if 'umperpix' not in self._global_calibration_overwrites.keys():
+            umperpix = self._get_global_calibration_value(['XTCAV_calib_umPerPx','OTRS:DMP1:695:RESOLUTION'],ok)
+        else:
+            umperpix = self.global_calibration_overwrites['umperpix']
+        if 'strstrength' not in self._global_calibration_overwrites.keys():
+            strstrength = self._get_global_calibration_value(['XTCAV_strength_par_S','Streak_Strength','OTRS:DMP1:695:TCAL_X'],ok)
+        else:
+            strstrength = self.global_calibration_overwrites['strstrength']
+        if 'rfampcalib' not in self._global_calibration_overwrites.keys():
+            rfampcalib = self._get_global_calibration_value(['XTCAV_Amp_Des_calib_MV','XTCAV_Cal_Amp','SIOC:SYS0:ML01:AO214'],ok)
+        else:
+            rfampcalib = self.global_calibration_overwrites['rfampcalib']
+        if 'rfphasecalib' not in self._global_calibration_overwrites.keys():
+            rfphasecalib = self._get_global_calibration_value(['XTCAV_Phas_Des_calib_deg','XTCAV_Cal_Phase','SIOC:SYS0:ML01:AO215'],ok)
+        else:
+            rfphasecalib = self.global_calibration_overwrites['rfphasecalib']
+        if 'dumpe' not in self._global_calibration_overwrites.keys():
+            dumpe = self._get_global_calibration_value(['XTCAV_Beam_energy_dump_GeV','Dump_Energy','REFS:DMP1:400:EDES'],ok)
+        else:
+            dumpe = self.global_calibration_overwrites['dumpe']
+        if 'dumpdisp' not in self._global_calibration_overwrites.keys():
+            dumpdisp = self._get_global_calibration_value(['XTCAV_calib_disp_posToEnergy','Dump_Disp','SIOC:SYS0:ML01:AO216'],ok)
+        else:
+            dumpdisp = self.global_calibration_overwrites['dumpdisp']
 
         self._global_calibrations = {
             'umperpix':umperpix,            # Pixel size of the XTCAV camera
@@ -225,7 +346,7 @@ class XTCAVProcessor(object):
         """
         self._vis_params = {
             "vrange" : None,
-            "fov" : (120,240),
+            "fov" : None,
             "bins" : None,
             "preprocess" : False,
         }
@@ -375,6 +496,12 @@ class XTCAVProcessor(object):
             print(f"Gas detector source type is {self.gasdetector_type}")
         pass       
 
+    def _set_n_pulses(self, n_pulses):
+        """
+        """
+        self._n_pulses = n_pulses
+
+
     ##### Get data #####
 
     def get_data(self, evt):
@@ -402,10 +529,11 @@ class XTCAVProcessor(object):
     # Note that ._get_ebeam and ._get_gasdetector are
     # defined in ._set_data_source_types_and_getters
 
-    def _get_shot_to_shot_parameters(self, ebeam, gasdetector):
+    def _get_shot_to_shot_parameters(self, evt, ebeam, gasdetector):
         """
         Parameters
         ----------
+        evt : psana.Event
         ebeam : psana.Bld.BldDataEBeamV(X)
             ebeam object for an event
         gasdetector : psana.Bld.BldDataFEEGasDetEnergy(V1)
@@ -449,17 +577,38 @@ class XTCAVProcessor(object):
             warnings.warn_explicit('No gas detector info',UserWarning,'XTCAV',0)
             ok=0
             energydetector=None
-            
         energy=1e-3*energydetector  # In J
-                
+
+        # Event ID info
+        iden = evt.get(psana.EventId)
+        time = iden.time()
+        sec = time[0]
+        nsec = time[1]
+        unixtime = int((sec<<32)|nsec)
+        fiducial = iden.fiducials()
+
+        # Overwrites
+        if 'ebeamcharge' in self._shotByShot_calibration_overwrites.keys():
+            ebeamcharge = self.global_shotByShot_overwrites['ebeamcharge']
+        if 'dumpecharge' in self._shotByShot_calibration_overwrites.keys():
+            dumpecharge = self.global_shotByShot_overwrites['dumpecharge']
+        if 'xtcavrfamp' in self._shotByShot_calibration_overwrites.keys():
+            xtcavrfamp = self.global_shotByShot_overwrites['xtcavrfamp']
+        if 'xtcavrfphase' in self._shotByShot_calibration_overwrites.keys():
+            xtcavrfphase = self.global_shotByShot_overwrites['xtcavrfphase']
+        if 'xrayenergy' in self._shotByShot_calibration_overwrites.keys():
+            energy = self.global_shotByShot_overwrites['xrayenergy']
+
+        # Return
         shotToShot={
             'ebeamcharge':ebeamcharge,      # ebeamcharge
             'dumpecharge':dumpecharge,      # dumpecharge in C
             'xtcavrfamp': xtcavrfamp,       # RF amplitude
             'xtcavrfphase':xtcavrfphase,    # RF phase
-            'xrayenergy':energy             # Xrays energy in J
+            'xrayenergy':energy,            # Xrays energy in J
+            'unixtime':unixtime,            # unix system time
+            'fiducial':fiducial,            # event fiducial
             }        
-           
         return shotToShot,ok
 
 
@@ -766,14 +915,6 @@ class XTCAVProcessor(object):
         # Get data
         ebeam, gasdetector, frame = self.get_data(evt)
 
-        # Set event processing flags
-        self._currenteventprocessedstep1=False
-        self._currenteventprocessedstep2=False
-        self._currenteventprocessedstep3=False
-        self._eventresultsstep1=[]
-        self._eventresultsstep2=[]
-        self._eventresultsstep3=[]
-
         # Set data
         self._currentevent=evt
         try:
@@ -849,6 +990,9 @@ class XTCAVProcessor(object):
     @property
     def dark_reference(self):
         return self._dark_reference
+    @property
+    def n_pulses(self):
+        return self._n_pulses
 
 
     ##### Preprocess Frames #####
@@ -1050,7 +1194,7 @@ class XTCAVProcessor(object):
             returnall=returnall
         )
 
-    def split_frame(self, frame, n_pulses, method='connected'):
+    def split_frame(self, frame, n_pulses=None, method='connected'):
         """
         For multi-pulse shot modes. Split an XTCAV image frame into subframes, each
         containing the data from a single pulse.
@@ -1059,8 +1203,9 @@ class XTCAVProcessor(object):
         ----------
         frame : 2d array
             The image
-        n_pulses : int
-            The number of pulses.  Should be 1 or 2
+        n_pulses : int or None
+            The number of pulses.  Should be 1 or 2 or None. If None uses the currently
+            set value (defaults to 1).
         method : string in ('connected','autothreshold','kmeans','spectral','dbscan')
             The image processing method used to split the images.  Currently
             (6/2026) only 'connected' is implemented and corresponds to what's
@@ -1070,8 +1215,15 @@ class XTCAVProcessor(object):
         -------
         3d array of shape (n_pulses, nx, ny)
         """
+        # Get number of pulses
+        if n_pulses is not None:
+            self._set_n_pulses(n_pulses)
+        else:
+            n_pulses = self.n_pulses
+        # For one pulse, return it
         if n_pulses==1:
             return frame[np.newaxis,:,:]
+        # For two pulses, split the frame
         elif n_pulses==2:
             assert(method in ('connected','authothreshold','kmeans','spectral','dbscan')), f"Unrecognized frame splitting method {method}."
             if method == 'connected':
@@ -1086,6 +1238,7 @@ class XTCAVProcessor(object):
                 return self.split_frame_dbscan_cluster(frame)
             else:
                 raise Exception(f"Unrecognized frame splitting method {method}.")
+        # Only 1 or 2 pulses are currently supported
         else:
             raise Exception(f"Only 1 or 2 pulse modes are currently supported. {n_pulses} pulses are not supported.")
 
@@ -1154,19 +1307,19 @@ class XTCAVProcessor(object):
         else:
 
             # Get stats in x (time)
-            xProfile=np.sum(frame,0);                                   # Profile projected onto the x axis
+            xProfile=np.sum(frame,0)                                    # Profile projected onto the x axis
             xCOM=np.dot(xProfile,np.transpose(self.x))/imFrac           # X position of the center of mass
             xRMS= np.sqrt(np.dot((self.x-xCOM)**2,xProfile)/imFrac)     # Standard deviation of the values in x
             ind=np.where(xProfile >= np.amax(xProfile)/2)[0]
             xFWHM=np.abs(ind[-1]-ind[0]+1)                              # FWHM of the X profile
-            
+
             # Get stats in y (energy)
             yProfile=np.sum(frame,1)                                    # Profile projected onto the y axis
             yCOM=np.dot(yProfile,self.y)/imFrac                         # Y position of the center of mass
             yRMS= np.sqrt(np.dot((self.y-yCOM)**2,yProfile)/imFrac)     # Standard deviation of the values in y
             ind=np.where(yProfile >= np.amax(yProfile)/2)
             yFWHM=np.abs(ind[-1]-ind[0])                                # FWHM of the Y profile
-     
+
             yCOMslice=self.divideNoWarn(np.dot(np.transpose(frame),self.y),xProfile,yCOM)    # Y position of the center of mass for each slice in x
             distances=np.outer(np.ones(yCOMslice.shape[0]),self.y)-np.outer(yCOMslice,np.ones(frame.shape[0]))    #For each point of the image, the distance to the y center of mass of the corresponding slice
             yRMSslice= self.divideNoWarn(np.sum(np.transpose(frame)*((distances)**2),1),xProfile,0)         #Width of the distribution of the points for each slice around the y center of masses                  
@@ -1212,7 +1365,7 @@ class XTCAVProcessor(object):
 
         # get global calibration values
         umperpix=self._global_calibrations['umperpix']
-        dumpe=self._global_calibrations['dumpe']
+        #dumpe=self._global_calibrations['dumpe']  # this doesn't exist in L10376...
         dumpdisp=self._global_calibrations['dumpdisp']    
         rfampcalib=self._global_calibrations['rfampcalib']
         rfphasecalib=self._global_calibrations['rfphasecalib']    
@@ -1221,6 +1374,7 @@ class XTCAVProcessor(object):
         # get shot-to-shot calibration values
         rfamp=shotToShot['xtcavrfamp']
         rfphase=shotToShot['xtcavrfphase']
+        #dumpe=shotToShot['dumpecharge']  # ?????
 
         # get pixel conversions
         yMeVPerPix = umperpix*dumpe/dumpdisp*1e-3                   # y pixel size (MeV)
@@ -1232,14 +1386,14 @@ class XTCAVProcessor(object):
         if np.abs(cosphasediff)<0.5:
             warnings.warn_explicit('The phase of the bunch with the RF field is far from 0 or 180 degrees',UserWarning,'XTCAV',0)
             ok=0
-        # (2) Flip time axis direction if needed
+        # (2) Check direction of the time axis
         signflip = np.sign(cosphasediff)
-        xfsPerPix = signflip*xfsPerPix;    
+        xfsPerPix = signflip*xfsPerPix
         
         # calculate x- and y- axis vectors with physical units
         xfs=xfsPerPix*(self.x-center[0])            # in fs
         yMeV=yMeVPerPix*(self.y-center[1])          # in MeV
-               
+
         # prepare answer and return
         physicalUnits={
             'yMeVPerPix':yMeVPerPix,
@@ -1326,9 +1480,15 @@ class XTCAVProcessor(object):
         return physicalUnits,ok
 
 
-    def get_shot_by_shot_statistics(self,n_pulses,_n_shots_max=None):
+    def get_shot_by_shot_statistics(self,n_pulses=None,_n_shots_max=None):
         """
         """
+        # Get number of pulses
+        if n_pulses is not None:
+            self._set_n_pulses(n_pulses)
+        else:
+            n_pulses = self.n_pulses
+
         # Containers
         self._pulse_statistics=[[] for i in range(n_pulses)]
         self._shot_to_shot_params=[]
@@ -1336,10 +1496,11 @@ class XTCAVProcessor(object):
         self._times_good=[]
 
         # Prep for loop
+        total = self.N_shots if _n_shots_max is None else _n_shots_max
         self.reset_shot_iterator()
         progress_bar = tqdm(
             desc="Calculating shot-by-shot statistics...",
-            total=self.N_shots
+            total=total
         )
 
         # Loop
@@ -1347,10 +1508,24 @@ class XTCAVProcessor(object):
             # Get event & data
             self.set_current_event(evt)
             ebeam, gasdetector, frame = self.get_data(evt)
-            shotToShot,ok = self._get_shot_to_shot_parameters(ebeam,gasdetector)
+            shotToShot,ok = self._get_shot_to_shot_parameters(evt,ebeam,gasdetector)
             if not ok:
                 continue
-            
+
+            # Check if frame is saturated
+            if np.max(self.frame)>self._camera_saturation_value:
+                continue
+
+            # Check if ROI is too close to frame edge
+            com = self.get_com_clean(self.frame)
+            fov = self._vis_params['fov']
+            if com[0]-fov[0]/2 < -fov[0]*0.1 or \
+                com[0]+fov[0]/2 >= 1023+fov[0]*0.1 or \
+                com[1]-fov[1]/2 < -fov[1]*0.1 or \
+                com[1]+fov[1]/2 >= 1023+fov[1]*0.1:
+                #warnings.warn(f"Shot {j} is outside the XTCAV camera frame")
+                continue
+
             # Prepare pulse images - denoise & split
             im = self.get_frame_denoised_current()
             ims,ok = self.split_frame(im,n_pulses)
@@ -1359,8 +1534,8 @@ class XTCAVProcessor(object):
             
             # Get statistics
             imageStats = []
-            for i in range(n_pulses):
-                imageStats.append(self.get_pulse_statistics(ims[i]))
+            for jdx in range(n_pulses):
+                imageStats.append(self.get_pulse_statistics(ims[jdx]))
             
             # Get physical units
             # TODO fix with proper unit calibration once we have correct metadata
@@ -1373,10 +1548,18 @@ class XTCAVProcessor(object):
             if not ok:
                 continue
 
+            # If the time step is negative, mirror the x-axis
+            if physical_units['xfsPerPix']<0:
+                physical_units['xfs'] = physical_units['xfs'][::-1]
+                for jdx in range(n_pulses):
+                    imageStats[jdx]['xProfile'] = imageStats[jdx]['xProfile'][::-1]
+                    imageStats[jdx]['yCOMslice'] = imageStats[jdx]['yCOMslice'][::-1]
+                    imageStats[jdx]['yRMSslice'] = imageStats[jdx]['yRMSslice'][::-1]
+
             # Store outputs
             if ok:
-                for i in range(n_pulses):
-                    self._pulse_statistics[i].append(imageStats[i])
+                for jdx in range(n_pulses):
+                    self._pulse_statistics[jdx].append(imageStats[jdx])
                 self._shot_to_shot_params.append(shotToShot)
                 self._physical_units.append(physical_units)
                 self._times_good.append(j)
@@ -1390,7 +1573,7 @@ class XTCAVProcessor(object):
                 if idx>=_n_shots_max-1:
                     break
         progress_bar.close()
-        print(f"Done. Calculated statistics for {idx+1} shots.")
+        print(f"Done. Calculated statistics for {len(self._times_good)} 'good' shots.")
         print("Setting shot iterator to traverse good shots only.")
         self.reset_iteration_type('good')
         pass
@@ -1806,9 +1989,15 @@ class XTCAVProcessor(object):
             plt.show()
             pass
 
-    def show_pulse_statistics(self,idx,n_pulses,vrange=None,fov=None,profiles=True,returnfig=False):
+    def show_pulse_statistics(self,idx,n_pulses=None,vrange=None,fov=None,profiles=True,returnfig=False):
         """
         """
+        # Get number of pulses
+        if n_pulses is not None:
+            self._set_n_pulses(n_pulses)
+        else:
+            n_pulses = self.n_pulses
+
         # Get frames
         jdx = self._times_good[idx]
         evt = self.get_event(jdx)
